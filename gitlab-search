@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+# 设置变量 cookies中 remember_user_token=xxxx;部分内容
+cookies="remember_user_token="
+
+# 设置变量 host
+host="http://gitlab.xxx.com"
+
+
+# ================= 以下内容非必要不用修改 =================
+# 获取命令行参数
+keyword="$1"
+# 检查 keyword 是否为空
+if [ -z "$keyword" ]; then
+  echo "请输入搜索关键词"
+  exit 1
+fi
+function get_all_projects() {
+  local keyword="$1"
+
+  url="${host}/api/v4/projects?order_by=id&sort=asc&simple=true&pagination=keyset&per_page=100"
+  max_id=0
+  while true; do
+    # 获取项目列表
+    projects=$(curl -s -H "Cookie: $cookies" "$url&id_after=$max_id")
+
+  # 检查是否获取到数据
+    if [ -z "$projects" ] || [ "$projects" == "[]" ]; then
+      echo "No more projects found."
+      break
+    fi
+
+    # 遍历项目并处理每个对象的 id 和 web_url
+    echo "$projects" | jq -r '.[] | [.id, .web_url] | @tsv' | while IFS=$'\t' read -r project_id web_url; do
+      # 调用 search_keyword 函数
+      search_keyword "$project_id" "$keyword" "$web_url"
+    done
+
+    # 更新最大ID
+    max_id=$(echo "$projects" | jq -r '.[-1].id')
+  done
+}
+
+function search_keyword() {
+  local project_id="$1"
+  local keyword="$2"
+  local web_url="$3"
+  local search_url="${host}/api/v4/projects/${project_id}/search?scope=blobs&search=${keyword}"
+
+  # 如果环境变量DEBUG=1则输出日志
+  if [ "$DEBUG" -eq 1 ]; then
+    echo "DEBUG: 获取地址 $search_url"
+  fi
+
+  # 获取搜索结果
+  results=$(curl -s -H "Cookie: $cookies" "$search_url")
+
+  # 检查是否获取到数据
+  if [ -z "$results" ] || [ "$results" == "[]" ]; then
+    return
+  fi
+
+  # 遍历结果并打印每个对象的 path 和 data 属性
+  echo "$results" | jq -r '.[] | [.path, .data, .ref, .startline] | @tsv' | while IFS=$'\t' read -r path data ref startline; do
+    echo -e "\n==================$web_url/-/blob/$ref/$path#L$startline\n $data \n======================================================================================================================"
+  done
+}
+
+
+# 调用 get_all_projects 函数并传递 keyword 参数
+get_all_projects "$keyword"
